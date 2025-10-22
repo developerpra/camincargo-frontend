@@ -116,56 +116,31 @@ function App() {
 
 
   return (
-    <div className="container">
-      <div className="header">
-        <h1 className="title">Product Store</h1>
-        <div className="header-status">
-          <div className={`status-tag ${isOnline ? 'online' : 'offline'}`}>
-            <div className="status-dot"></div>
+    <div className="max-w-4xl mx-auto p-5">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-semibold text-slate-800">Product Store</h1>
+        <div className="flex items-center gap-2">
+          <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium border ${isOnline ? 'bg-green-50 text-green-800 border-green-200' : 'bg-red-50 text-red-800 border-red-200'}`}>
+            <span className={`inline-block w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}`}></span>
             {isOnline ? 'Online' : 'Offline'}
           </div>
           {pendingCount > 0 && (
-            <div className="pending-sync-tag">
+            <div className="px-3 py-1 rounded-full text-xs font-semibold uppercase bg-amber-400 text-black border-2 border-amber-600">
               Pending {pendingCount}
             </div>
           )}
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="form">
-        <input
-          type="text"
-          name="name"
-          placeholder="Product Name"
-          value={form.name}
-          onChange={handleChange}
-          className="input"
-          required
-        />
-        <input
-          type="text"
-          name="description"
-          placeholder="Description"
-          value={form.description}
-          onChange={handleChange}
-          className="input"
-        />
-        <input
-          type="number"
-          name="price"
-          placeholder="Price"
-          value={form.price}
-          onChange={handleChange}
-          className="input"
-          min="0"
-          step="0.01"
-          required
-        />
-        <button type="submit" className="add-button">
-          {editingId ? "Update Product" : "Add Product"}
+      <form onSubmit={handleSubmit} className="flex flex-wrap gap-2 mb-4">
+        <input type="text" name="name" placeholder="Product Name" value={form.name} onChange={handleChange} className="flex-1 min-w-48 px-3 py-2 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" required />
+        <input type="text" name="description" placeholder="Description" value={form.description} onChange={handleChange} className="flex-1 min-w-48 px-3 py-2 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+        <input type="number" name="price" placeholder="Price" value={form.price} onChange={handleChange} className="w-36 px-3 py-2 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500" min="0" step="0.01" required />
+        <button type="submit" className="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700">
+          {editingId ? 'Update Product' : 'Add Product'}
         </button>
         {editingId && (
-          <button type="button" onClick={handleCancel} className="cancel-button">
+          <button type="button" onClick={handleCancel} className="px-4 py-2 rounded bg-slate-500 text-white hover:bg-slate-600">
             Cancel
           </button>
         )}
@@ -173,25 +148,38 @@ function App() {
 
       {error && <p className="error">{error}</p>}
 
-      <div className="grid">
-        {products.map((product) => (
-          <div key={product._id || product.id} className="card">
-            <h2 className="card-title">{product.name}</h2>
-            {product.description && <p className="card-desc">{product.description}</p>}
-            <p className="card-price">${Number(product.price || 0).toFixed(2)}</p>
-            {product._pendingSync && (
-              <div className="sync-indicator">Pending Sync</div>
-            )}
-            <div className="card-actions">
-              <button onClick={() => handleEdit(product)} className="edit-button">
-                Edit
-              </button>
-              <button onClick={() => handleDelete(product._id || product.id)} className="delete-button">
-                Delete
-              </button>
-            </div>
-          </div>
-        ))}
+      <div className="overflow-x-auto overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <table className="min-w-full table-auto border-collapse text-sm">
+          <thead className="bg-slate-50 text-slate-600 text-xs uppercase sticky top-0 z-10">
+            <tr>
+              <th className="px-4 py-3 text-left font-medium tracking-wide">Product</th>
+              <th className="px-4 py-3 text-right font-medium tracking-wide">Price</th>
+              <th className="px-4 py-3 text-right font-medium tracking-wide">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.map((product) => (
+              <tr key={product._id || product.id} className="border-b last:border-b-0 odd:bg-white even:bg-slate-50/60 hover:bg-slate-50 transition-colors">
+                <td className="px-4 py-3 align-middle">
+                  <div className="font-semibold text-slate-800">{product.name}</div>
+                  {product.description && (
+                    <div className="text-xs text-slate-500">{product.description}</div>
+                  )}
+                  {product._pendingSync && (
+                    <div className="mt-1 text-[11px] inline-block px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">Pending Sync</div>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right align-middle font-semibold text-emerald-700 whitespace-nowrap">${Number(product.price || 0).toFixed(2)}</td>
+                <td className="px-4 py-3 text-right align-middle">
+                  <div className="inline-flex items-center gap-2">
+                    <button onClick={() => handleEdit(product)} className="px-3 py-1.5 rounded bg-blue-600 text-white text-xs hover:bg-blue-700">Edit</button>
+                    <button onClick={() => handleDelete(product._id || product.id)} className="px-3 py-1.5 rounded bg-red-600 text-white text-xs hover:bg-red-700">Delete</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

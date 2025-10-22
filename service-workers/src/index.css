@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* app base tweaks */
+body { @apply bg-slate-50 text-slate-800; }
+
