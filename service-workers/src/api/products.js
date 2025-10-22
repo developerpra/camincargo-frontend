@@ -65,9 +65,11 @@ export async function createProduct(productData) {
       
       const newProduct = await response.json();
       
-      // Save to IndexedDB
-      await addProduct(newProduct);
-      return newProduct;
+      // Save to IndexedDB (ensure _pendingSync cleared)
+      const toStore = { ...newProduct };
+      if (toStore._pendingSync) delete toStore._pendingSync;
+      await addProduct(toStore);
+      return toStore;
     } else {
       // When offline, save to IndexedDB and mark for sync
       const newProduct = {
@@ -101,9 +103,11 @@ export async function updateProductById(id, productData) {
       
       const updatedProduct = await response.json();
       
-      // Update in IndexedDB
-      await updateProduct(updatedProduct);
-      return updatedProduct;
+      // Update in IndexedDB (ensure _pendingSync cleared)
+      const toStore = { ...updatedProduct };
+      if (toStore._pendingSync) delete toStore._pendingSync;
+      await updateProduct(toStore);
+      return toStore;
     } else {
       // When offline, get the original product and merge with updates
       const localProducts = await getProducts();

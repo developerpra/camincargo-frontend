@@ -115,10 +115,18 @@ async function refreshDataFromServer() {
   }
 }
 
-// Helper function to update product in IndexedDB
+// Helper function: replace temp/offline product with server product
 async function updateProductInDB(oldId, newProduct) {
-  const { updateProduct } = await import('./db/indexedDB');
-  await updateProduct(newProduct);
+  const { openDB } = await import('idb');
+  const db = await openDB('ecomDB', 4);
+  const tx = db.transaction('products', 'readwrite');
+  // remove temp/offline record
+  await tx.store.delete(oldId);
+  // insert server record (ensure no pending flag)
+  const toStore = { ...newProduct };
+  if (toStore._pendingSync) delete toStore._pendingSync;
+  await tx.store.put(toStore);
+  await tx.done;
 }
 
 // removed duplicate saveProducts in favor of DB helper
