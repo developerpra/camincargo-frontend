@@ -1,12 +1,11 @@
-import { getProducts, saveProducts, addProduct, deleteProduct as deleteProductFromDB, updateProduct, addDeletion, getDeletions, removeDeletion } from "../db/indexedDB";
+import { getProducts, saveProducts, addProduct, deleteProduct as deleteProductFromDB, updateProduct, addDeletion, getDeletions } from "../db/indexedDB";
+import { getAuthHeaders } from "./auth";
+import { API_ROOT } from "./base";
+import { unwrapListResponse, buildManagePayload, sortProductsForDisplay } from "./productUtils";
+const API_PRODUCT_LIST = `${API_ROOT}/Product/list`;
+const API_PRODUCT_MANAGE = `${API_ROOT}/Product/manage`;
+const apiDeleteUrl = (id) => `${API_ROOT}/Product/${id}`;
 
-function getApiBaseUrl() {
-  const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV;
-  if (isDev) return '/api/products';
-  const sameOriginBackend = typeof window !== 'undefined' && window.location && window.location.port === '4000';
-  return sameOriginBackend ? '/products' : 'http://localhost:4000/products';
-}
-const API_BASE_URL = getApiBaseUrl();
 
 // Helper function to check if we're online
 function isOnline() {
@@ -23,9 +22,10 @@ function handleApiError(error) {
 export async function fetchProducts() {
   try {
     if (isOnline()) {
-      const response = await fetch(API_BASE_URL);
+      const response = await fetch(API_PRODUCT_LIST, { headers: { ...getAuthHeaders() } });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const serverProducts = await response.json();
+      const serverJson = await response.json();
+      const serverProducts = unwrapListResponse(serverJson);
       const deletionIds = await getDeletions();
       
       // Get local products to preserve offline ones
@@ -37,13 +37,15 @@ export async function fetchProducts() {
         !offlineProducts.some(op => op._id === sp._id || op.id === sp._id) &&
         !deletionIds.includes(String(sp._id))
       )];
-      
-      await saveProducts(mergedProducts);
-      return mergedProducts;
+      const finalList = sortProductsForDisplay(mergedProducts);
+      await saveProducts(finalList);
+      return finalList;
     }
-    return await getProducts();
+    const offline = await getProducts();
+    return sortProductsForDisplay(offline);
   } catch (_e) {
-    return await getProducts();
+    const offline = await getProducts();
+    return sortProductsForDisplay(offline);
   }
 }
 
@@ -51,25 +53,30 @@ export async function fetchProducts() {
 export async function createProduct(productData) {
   try {
     if (isOnline()) {
-      const response = await fetch(API_BASE_URL, {
+      const response = await fetch(API_PRODUCT_MANAGE, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getAuthHeaders(),
         },
-        body: JSON.stringify(productData),
+        body: JSON.stringify(buildManagePayload({ ...productData })),
       });
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
-      const newProduct = await response.json();
-      
-      // Save to IndexedDB (ensure _pendingSync cleared)
-      const toStore = { ...newProduct };
-      if (toStore._pendingSync) delete toStore._pendingSync;
-      await addProduct(toStore);
-      return toStore;
+      // API returns full list; pick the item with max ID as newly created
+      const json = await response.json();
+      const list = unwrapListResponse(json);
+      const created = list.reduce((a, b) => (Number(a._id) > Number(b._id) ? a : b), list[0] || null);
+      if (created) {
+        await addProduct(created);
+        return created;
+      }
+      // fallback: optimistic
+      const fallback = { _id: `temp_${Date.now()}`, ...productData };
+      await addProduct(fallback);
+      return fallback;
     } else {
       // When offline, save to IndexedDB and mark for sync
       const newProduct = {
@@ -89,22 +96,23 @@ export async function createProduct(productData) {
 export async function updateProductById(id, productData) {
   try {
     if (isOnline()) {
-      const response = await fetch(`${API_BASE_URL}/${id}`, {
-        method: 'PUT',
+      const response = await fetch(API_PRODUCT_MANAGE, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getAuthHeaders(),
         },
-        body: JSON.stringify(productData),
+        body: JSON.stringify(buildManagePayload({ _id: id, ...productData })),
       });
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      const updatedProduct = await response.json();
-      
-      // Update in IndexedDB (ensure _pendingSync cleared)
-      const toStore = { ...updatedProduct };
+      const json = await response.json();
+      const list = unwrapListResponse(json);
+      const updated = list.find(p => String(p._id) === String(id));
+      const toStore = updated || { _id: String(id), ...productData };
       if (toStore._pendingSync) delete toStore._pendingSync;
       await updateProduct(toStore);
       return toStore;
@@ -134,8 +142,9 @@ export async function updateProductById(id, productData) {
 export async function deleteProductById(id) {
   try {
     if (isOnline()) {
-      const response = await fetch(`${API_BASE_URL}/${id}`, {
+      const response = await fetch(apiDeleteUrl(id), {
         method: 'DELETE',
+        headers: { ...getAuthHeaders() },
       });
       
       if (!response.ok) {

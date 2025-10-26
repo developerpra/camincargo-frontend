@@ -1,12 +1,12 @@
-import { getProducts, clearAllProducts, saveProducts as saveAllToDB, getDeletions, removeDeletion, clearDeletions } from './db/indexedDB';
+import { getProducts, clearAllProducts, saveProducts as saveAllToDB, getDeletions, removeDeletion } from './db/indexedDB';
+import { getAuthHeaders } from './api/auth';
+import { API_ROOT } from './api/base';
+import { buildManagePayload, unwrapListResponse } from './api/productUtils';
+const API_PRODUCT_LIST = `${API_ROOT}/Product/list`;
+const API_PRODUCT_MANAGE = `${API_ROOT}/Product/manage`;
+const apiDeleteUrl = (id) => `${API_ROOT}/Product/${id}`;
 
-function getApiBaseUrl() {
-  const isDev = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV;
-  if (isDev) return '/api/products';
-  const sameOriginBackend = typeof window !== 'undefined' && window.location && window.location.port === '4000';
-  return sameOriginBackend ? '/products' : 'http://localhost:4000/products';
-}
-const API_BASE_URL = getApiBaseUrl();
+// mapping and helpers moved to productUtils
 
 // Sync pending changes when coming back online
 export async function syncPendingChanges() {
@@ -15,12 +15,18 @@ export async function syncPendingChanges() {
   try {
     const localProducts = await getProducts();
     const pendingProducts = localProducts.filter(p => p._pendingSync);
+    const knownServerIds = new Set(
+      localProducts
+        .map(p => p._id || p.id)
+        .filter(id => id && !String(id).startsWith('temp_'))
+        .map(id => String(id))
+    );
 
     // First process deletions queue
     const deletionIds = await getDeletions();
     for (const delId of deletionIds) {
       try {
-        await fetch(`${API_BASE_URL}/${delId}`, { method: 'DELETE' });
+        await fetch(apiDeleteUrl(delId), { method: 'DELETE', headers: { ...getAuthHeaders() } });
         await removeDeletion(delId);
       } catch (error) {
         console.error('Failed to sync deletion:', delId, error);
@@ -30,48 +36,41 @@ export async function syncPendingChanges() {
     // Then process create/update queue
     for (const product of pendingProducts) {
       try {
-        if (product._deleted) {
-          // Handle deletion
-          await fetch(`${API_BASE_URL}/${product._id}`, {
-            method: 'DELETE',
-          });
-        } else if (product._id && product._id.startsWith('temp_')) {
-          // Handle creation
-          const response = await fetch(API_BASE_URL, {
+        if (product._id && product._id.startsWith('temp_')) {
+          // Create via manage endpoint
+          const response = await fetch(API_PRODUCT_MANAGE, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              name: product.name,
-              description: product.description,
-              price: product.price,
-            }),
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(buildManagePayload(product)),
           });
-          
           if (response.ok) {
-            const newProduct = await response.json();
-            // Update local storage with real ID
-            await updateProductInDB(product._id, newProduct);
+            const json = await response.json();
+            const list = unwrapListResponse(json);
+            // Prefer the item that is new compared to known server ids and matches name
+            const candidate = list.find(it => !knownServerIds.has(String(it._id)) && it.name === product.name) || null;
+            const created = candidate || list.reduce((a, b) => (Number(a._id) > Number(b._id) ? a : b), list[0] || null);
+            if (created) {
+              await updateProductInDB(product._id, created);
+              knownServerIds.add(String(created._id));
+            }
           }
         } else {
-          // Handle update
-          const response = await fetch(`${API_BASE_URL}/${product._id}`, {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              name: product.name,
-              description: product.description,
-              price: product.price,
-            }),
+          // Update via manage endpoint
+          const response = await fetch(API_PRODUCT_MANAGE, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+            body: JSON.stringify(buildManagePayload(product)),
           });
-          
           if (response.ok) {
-            const updatedProduct = await response.json();
-            // Update local storage with server response
-            await updateProductInDB(product._id, updatedProduct);
+            const json = await response.json();
+            const list = unwrapListResponse(json);
+            const updated = list.find(p => String(p._id) === String(product._id));
+            if (updated) {
+              await updateProductInDB(product._id, updated);
+            } else {
+              // Fallback: refresh from server to ensure UI updates
+              await refreshDataFromServer();
+            }
           }
         }
       } catch (error) {
@@ -79,8 +78,23 @@ export async function syncPendingChanges() {
       }
     }
 
-    // Refresh data from server
+    // Refresh data from server and also clear _pendingSync flags
     await refreshDataFromServer();
+    try {
+      const { openDB } = await import('idb');
+      const db = await openDB('ecomDB', 4);
+      const tx = db.transaction('products', 'readwrite');
+      const all = await tx.store.getAll();
+      for (const rec of all) {
+        if (rec._pendingSync) {
+          delete rec._pendingSync;
+          await tx.store.put(rec);
+        }
+      }
+      await tx.done;
+    } catch (e) {
+      console.warn('Could not clear pending flags', e);
+    }
   } catch (error) {
     console.error('Sync failed:', error);
   }
@@ -89,9 +103,10 @@ export async function syncPendingChanges() {
 // Refresh data from server
 async function refreshDataFromServer() {
   try {
-    const response = await fetch(API_BASE_URL);
+    const response = await fetch(API_PRODUCT_LIST, { headers: { ...getAuthHeaders() } });
     if (response.ok) {
-      const serverProducts = await response.json();
+      const serverJson = await response.json();
+      const serverProducts = unwrapListResponse(serverJson);
       const deletionIdsAfterSync = await getDeletions();
       
       // Get local products to preserve offline ones
@@ -136,3 +151,23 @@ window.addEventListener('online', () => {
   console.log('Back online, syncing pending changes...');
   syncPendingChanges();
 });
+
+// Also try syncing when tab gains focus or becomes visible
+window.addEventListener('focus', () => {
+  if (navigator.onLine) {
+    syncPendingChanges();
+  }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && navigator.onLine) {
+    syncPendingChanges();
+  }
+});
+
+// One initial attempt on load if we're already online
+if (typeof window !== 'undefined' && navigator.onLine) {
+  setTimeout(() => {
+    syncPendingChanges();
+  }, 0);
+}
