@@ -3,21 +3,25 @@ import { openDB } from "idb";
 const DB_NAME = "ecomDB";
 const STORE_NAME = "products";
 const STORE_DELETIONS = "deletions";
+const STORE_CATEGORIES = "categories";
 
 export async function initDB() {
-  return openDB(DB_NAME, 4, {
+  return openDB(DB_NAME, 5, {
     upgrade(db, oldVersion) {
-      // Recreate products store (keeps behavior consistent with previous code)
-      if (db.objectStoreNames.contains(STORE_NAME)) {
-        db.deleteObjectStore(STORE_NAME);
+      // Ensure products store exists (preserve data if already there)
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: "_id" });
       }
-      db.createObjectStore(STORE_NAME, { keyPath: "_id" });
 
-      // Create deletions store to track offline deletes across reloads
-      if (db.objectStoreNames.contains(STORE_DELETIONS)) {
-        db.deleteObjectStore(STORE_DELETIONS);
+      // Ensure deletions store exists
+      if (!db.objectStoreNames.contains(STORE_DELETIONS)) {
+        db.createObjectStore(STORE_DELETIONS, { keyPath: "id" });
       }
-      db.createObjectStore(STORE_DELETIONS, { keyPath: "id" });
+
+      // Categories store for local-only categories
+      if (!db.objectStoreNames.contains(STORE_CATEGORIES)) {
+        db.createObjectStore(STORE_CATEGORIES, { keyPath: "id" });
+      }
     }
   });
 }
@@ -88,4 +92,39 @@ export async function clearDeletions() {
   const tx = db.transaction(STORE_DELETIONS, "readwrite");
   await tx.store.clear();
   await tx.done;
+}
+
+// --- Categories helpers ---
+export async function getCategories() {
+  const db = await initDB();
+  return db.getAll(STORE_CATEGORIES);
+}
+
+export async function saveCategories(categories) {
+  const db = await initDB();
+  const tx = db.transaction(STORE_CATEGORIES, "readwrite");
+  categories.forEach((cat) => tx.store.put(cat));
+  await tx.done;
+}
+
+export async function addOrGetCategoryByName(name) {
+  const normalized = String(name || "").trim();
+  if (!normalized) return "";
+  const db = await initDB();
+  const tx = db.transaction(STORE_CATEGORIES, "readwrite");
+  const all = await tx.store.getAll();
+  const existing = all.find(c => String(c.name).toLowerCase() === normalized.toLowerCase());
+  if (existing) {
+    await tx.done;
+    return existing.id;
+  }
+  const id = `cat_${Date.now()}`;
+  await tx.store.put({ id, name: normalized, createdOn: new Date().toISOString() });
+  await tx.done;
+  return id;
+}
+
+export async function getCategoryById(id) {
+  const db = await initDB();
+  return db.get(STORE_CATEGORIES, String(id));
 }

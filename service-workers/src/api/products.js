@@ -1,11 +1,17 @@
-import { getProducts, saveProducts, addProduct, deleteProduct as deleteProductFromDB, updateProduct, addDeletion, getDeletions } from "../db/indexedDB";
-import { getAuthHeaders } from "./auth";
+import { getProducts, saveProducts, addProduct, deleteProduct as deleteProductFromDB, updateProduct, addDeletion, getDeletions, addOrGetCategoryByName } from "../db/indexedDB";
 import { API_ROOT } from "./base";
 import { unwrapListResponse, buildManagePayload, sortProductsForDisplay } from "./productUtils";
 const API_PRODUCT_LIST = `${API_ROOT}/Product/list`;
 const API_PRODUCT_MANAGE = `${API_ROOT}/Product/manage`;
 const apiDeleteUrl = (id) => `${API_ROOT}/Product/${id}`;
 
+const DEMO_CATEGORIES = ["Electronics", "Clothing", "Groceries", "Accessories", "Books"];
+function pickDemoCategory(name) {
+  const s = String(name || "");
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
+  return DEMO_CATEGORIES[hash % DEMO_CATEGORIES.length];
+}
 
 // Helper function to check if we're online
 function isOnline() {
@@ -22,7 +28,7 @@ function handleApiError(error) {
 export async function fetchProducts() {
   try {
     if (isOnline()) {
-      const response = await fetch(API_PRODUCT_LIST, { headers: { ...getAuthHeaders() } });
+      const response = await fetch(API_PRODUCT_LIST);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const serverJson = await response.json();
       const serverProducts = unwrapListResponse(serverJson);
@@ -30,13 +36,27 @@ export async function fetchProducts() {
       
       // Get local products to preserve offline ones
       const localProducts = await getProducts();
+      const idToLocal = new Map(localProducts.map(lp => [String(lp._id || lp.id), lp]));
       const offlineProducts = localProducts.filter(p => p._pendingSync);
       
       // Merge server products with offline products, keeping offline ones at top
-      const mergedProducts = [...offlineProducts, ...serverProducts.filter(sp => 
-        !offlineProducts.some(op => op._id === sp._id || op.id === sp._id) &&
-        !deletionIds.includes(String(sp._id))
-      )];
+      const serverWithCategories = await Promise.all(
+        serverProducts
+          .filter(sp => !offlineProducts.some(op => op._id === sp._id || op.id === sp._id) && !deletionIds.includes(String(sp._id)))
+          .map(async sp => {
+            const local = idToLocal.get(String(sp._id));
+            if (local && (local.categoryId || local.categoryName)) {
+              return { ...sp, categoryId: local.categoryId, categoryName: local.categoryName };
+            }
+            if (!sp.categoryName && !sp.categoryId) {
+              const categoryName = pickDemoCategory(sp.name);
+              const categoryId = await addOrGetCategoryByName(categoryName);
+              return { ...sp, categoryId, categoryName };
+            }
+            return sp;
+          })
+      );
+      const mergedProducts = [...offlineProducts, ...serverWithCategories];
       const finalList = sortProductsForDisplay(mergedProducts);
       await saveProducts(finalList);
       return finalList;
@@ -53,13 +73,16 @@ export async function fetchProducts() {
 export async function createProduct(productData) {
   try {
     if (isOnline()) {
+      const payloadData = { ...productData };
+      if (payloadData.categoryName && !payloadData.categoryId) {
+        payloadData.categoryId = await addOrGetCategoryByName(payloadData.categoryName);
+      }
       const response = await fetch(API_PRODUCT_MANAGE, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
-        body: JSON.stringify(buildManagePayload({ ...productData })),
+        body: JSON.stringify(buildManagePayload(payloadData)),
       });
       
       if (!response.ok) {
@@ -70,11 +93,15 @@ export async function createProduct(productData) {
       const list = unwrapListResponse(json);
       const created = list.reduce((a, b) => (Number(a._id) > Number(b._id) ? a : b), list[0] || null);
       if (created) {
-        await addProduct(created);
-        return created;
+        const withCategory = payloadData.categoryId || payloadData.categoryName ? { ...created, categoryId: payloadData.categoryId, categoryName: payloadData.categoryName } : created;
+        await addProduct(withCategory);
+        return withCategory;
       }
       // fallback: optimistic
       const fallback = { _id: `temp_${Date.now()}`, ...productData };
+      if (fallback.categoryName && !fallback.categoryId) {
+        fallback.categoryId = await addOrGetCategoryByName(fallback.categoryName);
+      }
       await addProduct(fallback);
       return fallback;
     } else {
@@ -84,6 +111,9 @@ export async function createProduct(productData) {
         _id: productData._id || `temp_${Date.now()}`,
         _pendingSync: true
       };
+      if (newProduct.categoryName && !newProduct.categoryId) {
+        newProduct.categoryId = await addOrGetCategoryByName(newProduct.categoryName);
+      }
       await addProduct(newProduct);
       return newProduct;
     }
@@ -96,13 +126,16 @@ export async function createProduct(productData) {
 export async function updateProductById(id, productData) {
   try {
     if (isOnline()) {
+      const payloadData = { _id: id, ...productData };
+      if (payloadData.categoryName && !payloadData.categoryId) {
+        payloadData.categoryId = await addOrGetCategoryByName(payloadData.categoryName);
+      }
       const response = await fetch(API_PRODUCT_MANAGE, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
         },
-        body: JSON.stringify(buildManagePayload({ _id: id, ...productData })),
+        body: JSON.stringify(buildManagePayload(payloadData)),
       });
       
       if (!response.ok) {
@@ -112,7 +145,8 @@ export async function updateProductById(id, productData) {
       const json = await response.json();
       const list = unwrapListResponse(json);
       const updated = list.find(p => String(p._id) === String(id));
-      const toStore = updated || { _id: String(id), ...productData };
+      const toStoreBase = updated || { _id: String(id), ...productData };
+      const toStore = (payloadData.categoryId || payloadData.categoryName) ? { ...toStoreBase, categoryId: payloadData.categoryId, categoryName: payloadData.categoryName } : toStoreBase;
       if (toStore._pendingSync) delete toStore._pendingSync;
       await updateProduct(toStore);
       return toStore;
@@ -128,6 +162,9 @@ export async function updateProductById(id, productData) {
           _id: id,
           _pendingSync: true
         };
+        if (updatedProduct.categoryName && !updatedProduct.categoryId) {
+          updatedProduct.categoryId = await addOrGetCategoryByName(updatedProduct.categoryName);
+        }
         await updateProduct(updatedProduct);
         return updatedProduct;
       }
@@ -144,7 +181,7 @@ export async function deleteProductById(id) {
     if (isOnline()) {
       const response = await fetch(apiDeleteUrl(id), {
         method: 'DELETE',
-        headers: { ...getAuthHeaders() },
+        headers: {},
       });
       
       if (!response.ok) {
