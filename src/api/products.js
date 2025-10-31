@@ -5,13 +5,7 @@ const API_PRODUCT_LIST = `${API_ROOT}/Product/list`;
 const API_PRODUCT_MANAGE = `${API_ROOT}/Product/manage`;
 const apiDeleteUrl = (id) => `${API_ROOT}/Product/${id}`;
 
-const DEMO_CATEGORIES = ["Electronics", "Clothing", "Groceries", "Accessories", "Books"];
-function pickDemoCategory(name) {
-  const s = String(name || "");
-  let hash = 0;
-  for (let i = 0; i < s.length; i++) hash = (hash * 31 + s.charCodeAt(i)) >>> 0;
-  return DEMO_CATEGORIES[hash % DEMO_CATEGORIES.length];
-}
+// Removed demo category logic; use real backend categories only
 
 // Helper function to check if we're online
 function isOnline() {
@@ -40,22 +34,15 @@ export async function fetchProducts() {
       const offlineProducts = localProducts.filter(p => p._pendingSync);
       
       // Merge server products with offline products, keeping offline ones at top
-      const serverWithCategories = await Promise.all(
-        serverProducts
-          .filter(sp => !offlineProducts.some(op => op._id === sp._id || op.id === sp._id) && !deletionIds.includes(String(sp._id)))
-          .map(async sp => {
-            const local = idToLocal.get(String(sp._id));
-            if (local && (local.categoryId || local.categoryName)) {
-              return { ...sp, categoryId: local.categoryId, categoryName: local.categoryName };
-            }
-            if (!sp.categoryName && !sp.categoryId) {
-              const categoryName = pickDemoCategory(sp.name);
-              const categoryId = await addOrGetCategoryByName(categoryName);
-              return { ...sp, categoryId, categoryName };
-            }
-            return sp;
-          })
-      );
+      const serverWithCategories = serverProducts
+        .filter(sp => !offlineProducts.some(op => op._id === sp._id || op.id === sp._id) && !deletionIds.includes(String(sp._id)))
+        .map(sp => {
+          const local = idToLocal.get(String(sp._id));
+          if (local && (local.categoryId || local.categoryName)) {
+            return { ...sp, categoryId: local.categoryId, categoryName: local.categoryName };
+          }
+          return sp;
+        });
       const mergedProducts = [...offlineProducts, ...serverWithCategories];
       const finalList = sortProductsForDisplay(mergedProducts);
       await saveProducts(finalList);
@@ -74,9 +61,6 @@ export async function createProduct(productData) {
   try {
     if (isOnline()) {
       const payloadData = { ...productData };
-      if (payloadData.categoryName && !payloadData.categoryId) {
-        payloadData.categoryId = await addOrGetCategoryByName(payloadData.categoryName);
-      }
       const response = await fetch(API_PRODUCT_MANAGE, {
         method: 'POST',
         headers: {
@@ -99,9 +83,6 @@ export async function createProduct(productData) {
       }
       // fallback: optimistic
       const fallback = { _id: `temp_${Date.now()}`, ...productData };
-      if (fallback.categoryName && !fallback.categoryId) {
-        fallback.categoryId = await addOrGetCategoryByName(fallback.categoryName);
-      }
       await addProduct(fallback);
       return fallback;
     } else {
@@ -127,9 +108,6 @@ export async function updateProductById(id, productData) {
   try {
     if (isOnline()) {
       const payloadData = { _id: id, ...productData };
-      if (payloadData.categoryName && !payloadData.categoryId) {
-        payloadData.categoryId = await addOrGetCategoryByName(payloadData.categoryName);
-      }
       const response = await fetch(API_PRODUCT_MANAGE, {
         method: 'POST',
         headers: {
@@ -162,9 +140,7 @@ export async function updateProductById(id, productData) {
           _id: id,
           _pendingSync: true
         };
-        if (updatedProduct.categoryName && !updatedProduct.categoryId) {
-          updatedProduct.categoryId = await addOrGetCategoryByName(updatedProduct.categoryName);
-        }
+        // categoryId should be provided by UI selection
         await updateProduct(updatedProduct);
         return updatedProduct;
       }

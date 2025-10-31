@@ -6,19 +6,23 @@ import {
   deleteProductById,
 } from "./api/products";
 import "./App.css";
+import { fetchCategories } from "./api/categories";
 
 function App() {
   const [products, setProducts] = useState([]);
-  const [form, setForm] = useState({ name: "", description: "", price: "", categoryName: "" });
+  const [categories, setCategories] = useState([]);
+  const [form, setForm] = useState({ name: "", description: "", price: "", categoryId: "", categoryName: "" });
   const [error, setError] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Calculate pending sync count
   const pendingCount = products.filter((p) => p._pendingSync).length;
 
   useEffect(() => {
     loadProducts();
+    loadCategories();
 
     // Listen for online/offline events
     const handleOnline = () => setIsOnline(true);
@@ -31,11 +35,16 @@ function App() {
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+    function handleSyncState(e) {
+      setIsSyncing(!!(e?.detail?.syncing));
+    }
+    window.addEventListener("syncState", handleSyncState);
     window.addEventListener("dataSynced", handleDataSynced);
 
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("syncState", handleSyncState);
       window.removeEventListener("dataSynced", handleDataSynced);
     };
   }, []);
@@ -52,8 +61,28 @@ function App() {
     }
   }
 
+  async function loadCategories() {
+    try {
+      const list = await fetchCategories();
+      setCategories(list);
+    } catch (e) {
+      // ignore; products page still works offline without categories
+    }
+  }
+
+  function getCategoryLabel(p) {
+    const byId = p?.categoryId ? categories.find(c => String(c.id) === String(p.categoryId)) : null;
+    return (byId?.name || p?.categoryName || "NA");
+  }
+
   const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    if (name === 'categoryId') {
+      const selected = categories.find(c => String(c.id) === String(value));
+      setForm({ ...form, categoryId: value, categoryName: selected ? selected.name : "" });
+    } else {
+      setForm({ ...form, [name]: value });
+    }
     if (error) setError("");
   };
 
@@ -72,7 +101,8 @@ function App() {
           name: form.name.trim(),
           description: form.description.trim(),
           price,
-          categoryName: form.categoryName.trim(),
+          categoryId: form.categoryId || undefined,
+          categoryName: form.categoryName || undefined,
         };
 
         const updatedProduct = await updateProductById(editingId, productData);
@@ -88,14 +118,15 @@ function App() {
           name: form.name.trim(),
           description: form.description.trim(),
           price,
-          categoryName: form.categoryName.trim(),
+          categoryId: form.categoryId || undefined,
+          categoryName: form.categoryName || undefined,
         };
 
         const newProduct = await createProduct(productData);
         setProducts([newProduct, ...products]);
       }
 
-      setForm({ name: "", description: "", price: "", categoryName: "" });
+      setForm({ name: "", description: "", price: "", categoryId: "", categoryName: "" });
       setError("");
     } catch (error) {
       setError(error.message || "Failed to save product");
@@ -116,19 +147,20 @@ function App() {
       name: product.name,
       description: product.description,
       price: product.price,
+      categoryId: product.categoryId || "",
       categoryName: product.categoryName || "",
     });
     setEditingId(product._id || product.id);
   };
 
   const handleCancel = () => {
-    setForm({ name: "", description: "", price: "", categoryName: "" });
+    setForm({ name: "", description: "", price: "", categoryId: "", categoryName: "" });
     setEditingId(null);
     setError("");
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-5">
+    <div className="max-w-5xl mx-auto p-5">
       <div className="sticky top-0 z-40 border-b border-slate-200 backdrop-blur">
         <div className="flex items-center justify-between py-3 px-2">
           <h1 className="text-xl font-semibold text-slate-800">
@@ -149,6 +181,11 @@ function App() {
               ></span>
               {isOnline ? "Online" : "Offline"}
             </div>
+            {isSyncing && (
+              <div className="flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold uppercase bg-amber-100 text-amber-900 border border-amber-300">
+                Syncing…
+              </div>
+            )}
             {pendingCount > 0 && (
               <div className="px-3 py-1 rounded-full text-xs font-semibold uppercase bg-amber-400 text-black border-2 border-amber-600">
                 Pending {pendingCount}
@@ -177,14 +214,17 @@ function App() {
             onChange={handleChange}
             className="flex-1 min-w-48 px-3 py-2 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
-          <input
-            type="text"
-            name="categoryName"
-            placeholder="Category"
-            value={form.categoryName}
+          <select
+            name="categoryId"
+            value={form.categoryId}
             onChange={handleChange}
-            className="flex-1 min-w-36 px-3 py-2 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-          />
+            className="flex-1 min-w-36 px-3 py-2 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+          >
+            <option value="">Select category</option>
+            {categories.map(c => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
           <input
             type="number"
             name="price"
@@ -216,7 +256,7 @@ function App() {
 
       {error && <p className="error">{error}</p>}
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm mt-4" style={{ maxHeight: '50vh', height: '50vh' }}>
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm mt-4" style={{ maxHeight: '60vh', height: '60vh' }}>
         <table className="min-w-full table-auto border-collapse text-sm">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase sticky z-30">
             <tr>
@@ -244,7 +284,7 @@ function App() {
             </tr>
           </thead>
           <tbody>
-            {products.map((product) => (
+            {products.filter(p => !p._pendingSync).map((product) => (
               <tr
                 key={product._id || product.id}
                 className="border-b last:border-b-0 odd:bg-white even:bg-slate-50/60 hover:bg-slate-50 transition-colors"
@@ -268,7 +308,7 @@ function App() {
                   )}
                 </td>
                 <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-700">
-                  {product.categoryName || "NA"}
+                  {getCategoryLabel(product)}
                 </td>
                 <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-700">
                   {product.updatedBy || ""}
@@ -305,7 +345,8 @@ function App() {
       <div className="mt-6 space-y-2">
         {Object.entries(
           products.reduce((acc, p) => {
-            const key = (p.categoryName || '').trim();
+            const label = getCategoryLabel(p);
+            const key = String(label || '').trim();
             if (!key || key.toLowerCase() === 'na') return acc; // exclude NA or empty
             if (!acc[key]) acc[key] = [];
             acc[key].push(p);
@@ -343,7 +384,7 @@ function App() {
                           <div className="mt-1 text-[11px] inline-block px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300">Pending Sync</div>
                         )}
                       </td>
-                      <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-700">{item.categoryName || ''}</td>
+                      <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-700">{getCategoryLabel(item)}</td>
                       <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-700">{item.updatedBy || ''}</td>
                       <td className="px-4 py-3 align-middle whitespace-nowrap text-slate-700">{item.updatedOn || ''}</td>
                       <td className="px-4 py-3 text-right align-middle font-semibold text-emerald-700 whitespace-nowrap">${Number(item.price || 0).toFixed(2)}</td>

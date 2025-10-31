@@ -7,13 +7,17 @@ export function mapFromServer(p) {
   const price = p?.Price ?? p?.price ?? 0;
   const updatedBy = p?.UpdatedBy ?? p?.updatedBy ?? '';
   const updatedOn = p?.UpdatedOn ?? p?.updatedOn ?? '';
+  const categoryId = p?.CategoryId ?? p?.CategoryID ?? p?.categoryId ?? p?.categoryID ?? p?.Category_Id ?? p?.category_Id;
+  const categoryName = p?.CategoryName ?? p?.categoryName ?? p?.Category ?? p?.category ?? '';
   return {
     _id: id != null ? String(id) : undefined,
     name,
     description,
     price: Number(price),
     updatedBy,
-    updatedOn
+    updatedOn,
+    categoryId: categoryId != null ? String(categoryId) : undefined,
+    categoryName: categoryName || undefined
   };
 }
 
@@ -28,7 +32,9 @@ export function buildManagePayload(prod) {
     ProductName: prod.name,
     Description: prod.description,
     Price: Number(prod.price || 0),
-    UpdatedBy: 'admin'
+    UpdatedBy: 'admin',
+    CategoryId: prod.categoryId ? Number(prod.categoryId) : null,
+    CategoryName: prod.categoryName || null
   };
 }
 
